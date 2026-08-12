@@ -1,0 +1,15 @@
+# Cartelle pesanti e dati
+dataset_pedalboard/
+IDMT-SMT-GUITAR_V2/
+env/
+
+# Modelli, pesi ed esecuzioni temporanee
+*.pth
+*.wav
+*.npy
+*.zip
+.gradio/
+__pycache__/
+
+# Configurazione VS Code
+.vscode/
