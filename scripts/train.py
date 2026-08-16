@@ -23,36 +23,46 @@ def masked_mse_loss(pred_params, target_params, target_onoff):
     return torch.tensor(0.0, device=pred_params.device)
 
 
-def train_model():
+def train_model(dataset_dir=None, save_path=None):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(base_dir, ".."))
-    dataset_dir = os.path.join(project_root, "datasets")
-    model_save_path = os.path.join(base_dir, "pod_go_model.pth")
+
+    if dataset_dir is None:
+        project_root = os.path.abspath(os.path.join(base_dir, ".."))
+        dataset_dir = os.path.join(project_root, "datasets")
+
+    if save_path is None:
+        save_path = os.path.join(base_dir, "pod_go_model.pth")
 
     batch_size = 32
     epochs = 60
     learning_rate = 5e-4
-    weight_decay = 1e-4
+    weight_decay = 1e-2  # Aumentato da 1e-4 a 1e-2 per forte regolarizzazione L2
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training Device: {device}")
+    print(f"Dataset Path: {dataset_dir}")
 
-    dataset = GuitarDataset(dataset_dir=dataset_dir)
-    train_size = int(0.85 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    # Inizializzazione separata per disattivare la data augmentation sul validation set
+    full_dataset = GuitarDataset(dataset_dir=dataset_dir, is_train=True)
+    train_size = int(0.85 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    
+    # Disattiva SpecAugment per le istanze di validazione
+    val_dataset.dataset.is_train = False
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    num_amp_classes = len(dataset.amp_to_id)
+    num_amp_classes = len(full_dataset.amp_to_id)
     model = GuitarEffectsNet(num_amp_classes=num_amp_classes).to(device)
 
     criterion_amp = nn.CrossEntropyLoss()
     criterion_onoff = nn.BCEWithLogitsLoss()
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=4)
 
     best_val_loss = float("inf")
 
@@ -74,8 +84,8 @@ def train_model():
             loss_onoff = criterion_onoff(logits_onoff, y_onoff)
             loss_params = masked_mse_loss(pred_params, y_params, y_onoff)
 
-            # Peso bilanciato per le tre componenti
-            total_loss = loss_amp + 1.2 * loss_onoff + 1.5 * loss_params
+            # Bilanciamento pesi rimodulato per favorire la generalizzazione
+            total_loss = loss_amp + 1.0 * loss_onoff + 0.8 * loss_params
 
             total_loss.backward()
             optimizer.step()
@@ -103,7 +113,7 @@ def train_model():
                 loss_onoff = criterion_onoff(logits_onoff, y_onoff)
                 loss_params = masked_mse_loss(pred_params, y_params, y_onoff)
 
-                total_loss = loss_amp + 1.2 * loss_onoff + 1.5 * loss_params
+                total_loss = loss_amp + 1.0 * loss_onoff + 0.8 * loss_params
                 val_loss += total_loss.item() * x.size(0)
 
                 preds_amp = torch.argmax(logits_amp, dim=1)
@@ -120,9 +130,8 @@ def train_model():
             best_val_loss = epoch_val_loss
             torch.save({
                 'model_state_dict': model.state_dict(),
-                'amp_to_id': dataset.amp_to_id,
-                'id_to_amp': dataset.id_to_amp
-            }, model_save_path)
-
-if __name__ == "__main__":
-    train_model()
+                'amp_to_id': full_dataset.amp_to_id,
+                'id_to_amp': full_dataset.id_to_amp
+            }, save_path)
+            print(f"Model saved to {save_path}")
+    print("Training complete!")

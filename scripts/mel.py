@@ -6,7 +6,7 @@ import librosa
 import soundfile as sf
 from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Button
+import torchaudio.transforms as T
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -77,8 +77,9 @@ def generate_mel_spectrograms(dataset_dir=DATASET_DIR):
 
 
 class GuitarDataset(Dataset):
-    def __init__(self, dataset_dir=DATASET_DIR):
+    def __init__(self, dataset_dir=DATASET_DIR, is_train=True):
         self.dataset_dir = dataset_dir
+        self.is_train = is_train
         json_path = os.path.join(self.dataset_dir, "dataset_labels.json")
 
         if not os.path.exists(json_path):
@@ -87,7 +88,6 @@ class GuitarDataset(Dataset):
         with open(json_path, "r", encoding="utf-8") as f:
             self.metadata = json.load(f)
 
-        # Mappatura automatica delle classi degli amplificatori
         amps = set()
         for item in self.metadata:
             amp = item.get("amplifier")
@@ -96,6 +96,10 @@ class GuitarDataset(Dataset):
         
         self.amp_to_id = {amp_name: idx for idx, amp_name in enumerate(sorted(amps))}
         self.id_to_amp = {idx: amp_name for amp_name, idx in self.amp_to_id.items()}
+
+        # SpecAugment Masking Transforms
+        self.time_masking = T.TimeMasking(time_mask_param=20)
+        self.freq_masking = T.FrequencyMasking(freq_mask_param=15)
 
     def __len__(self):
         return len(self.metadata)
@@ -107,12 +111,15 @@ class GuitarDataset(Dataset):
         mel_norm = np.load(spec_path)
         x_tensor = torch.tensor(mel_norm, dtype=torch.float32).unsqueeze(0)
 
-        # Amp target
+        # SpecAugment applicato solo in fase di training
+        if self.is_train:
+            x_tensor = self.freq_masking(x_tensor)
+            x_tensor = self.time_masking(x_tensor)
+
         amp = item.get("amplifier")
         amp_name = f"{amp['brand']}_{amp['model']}" if amp else "UNKNOWN"
         amp_target = torch.tensor(self.amp_to_id[amp_name], dtype=torch.long)
 
-        # Effects ON/OFF targets
         fx = item["effects"]
         onoff_targets = [
             float(fx["highpass"]["enabled"]),
@@ -122,7 +129,6 @@ class GuitarDataset(Dataset):
             float(fx["reverb"]["enabled"])
         ]
 
-        # Parameters targets
         hp, dist, ch, dl, rv = fx["highpass"], fx["distortion"], fx["chorus"], fx["delay"], fx["reverb"]
         params_normalized = [
             normalize_val(hp.get("cutoff_frequency_hz", 0.0), *PARAM_RANGES["highpass_cutoff"]),
