@@ -1,9 +1,10 @@
 import os
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from mel import GuitarDataset
 from model import GuitarEffectsNet
+import matplotlib.pyplot as plt
 
 def masked_mse_loss(pred_params, target_params, target_onoff):
     mask_list = [
@@ -36,35 +37,45 @@ def train_model(dataset_dir=None, save_path=None):
     batch_size = 32
     epochs = 60
     learning_rate = 5e-4
-    weight_decay = 1e-2  # Aumentato da 1e-4 a 1e-2 per forte regolarizzazione L2
+    weight_decay = 1e-3  # Calibrato da 1e-2 a 1e-3 per bilanciare regolarizzazione ed espressività
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training Device: {device}")
     print(f"Dataset Path: {dataset_dir}")
 
-    # Inizializzazione separata per disattivare la data augmentation sul validation set
-    full_dataset = GuitarDataset(dataset_dir=dataset_dir, is_train=True)
-    train_size = int(0.85 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
+    # 1. Istanziazione distinta per separare nettamente le logiche di SpecAugment
+    train_dataset_full = GuitarDataset(dataset_dir=dataset_dir, is_train=True)
+    val_dataset_full = GuitarDataset(dataset_dir=dataset_dir, is_train=False)
 
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-    
-    # Disattiva SpecAugment per le istanze di validazione
-    val_dataset.dataset.is_train = False
+    total_samples = len(train_dataset_full)
+    train_size = int(0.85 * total_samples)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    # Creazione di indici causali riproducibili
+    generator = torch.Generator().manual_seed(42)
+    indices = torch.randperm(total_samples, generator=generator).tolist()
 
-    num_amp_classes = len(full_dataset.amp_to_id)
+    train_subset = Subset(train_dataset_full, indices[:train_size])
+    val_subset = Subset(val_dataset_full, indices[train_size:])
+
+    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+
+    num_amp_classes = len(train_dataset_full.amp_to_id)
     model = GuitarEffectsNet(num_amp_classes=num_amp_classes).to(device)
 
     criterion_amp = nn.CrossEntropyLoss()
     criterion_onoff = nn.BCEWithLogitsLoss()
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     best_val_loss = float("inf")
+    patience = 12
+    patience_counter = 0
+
+    # Tracciamento storico metriche per grafici
+    train_losses = []
+    val_losses = []
 
     for epoch in range(epochs):
         model.train()
@@ -84,7 +95,6 @@ def train_model(dataset_dir=None, save_path=None):
             loss_onoff = criterion_onoff(logits_onoff, y_onoff)
             loss_params = masked_mse_loss(pred_params, y_params, y_onoff)
 
-            # Bilanciamento pesi rimodulato per favorire la generalizzazione
             total_loss = loss_amp + 1.0 * loss_onoff + 0.8 * loss_params
 
             total_loss.backward()
@@ -92,7 +102,7 @@ def train_model(dataset_dir=None, save_path=None):
 
             running_loss += total_loss.item() * x.size(0)
 
-        epoch_train_loss = running_loss / train_size
+        epoch_train_loss = running_loss / len(train_subset)
 
         # Fase di Validazione
         model.eval()
@@ -120,20 +130,43 @@ def train_model(dataset_dir=None, save_path=None):
                 amp_correct += (preds_amp == y_amp).sum().item()
                 total_val_samples += x.size(0)
 
-        epoch_val_loss = val_loss / val_size
+        epoch_val_loss = val_loss / len(val_subset)
         amp_acc = (amp_correct / total_val_samples) * 100.0
+
+        train_losses.append(epoch_train_loss)
+        val_losses.append(epoch_val_loss)
+
         scheduler.step(epoch_val_loss)
 
         print(f"Epoch [{epoch+1:02d}/{epochs}] | Train Loss: {epoch_train_loss:.4f} | Val Loss: {epoch_val_loss:.4f} | Amp Acc: {amp_acc:.2f}%")
 
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
+            patience_counter = 0
             torch.save({
                 'model_state_dict': model.state_dict(),
-                'amp_to_id': full_dataset.amp_to_id,
-                'id_to_amp': full_dataset.id_to_amp
+                'amp_to_id': train_dataset_full.amp_to_id,
+                'id_to_amp': train_dataset_full.id_to_amp
             }, save_path)
             print(f"Model saved to {save_path}")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"\n[Early Stopping] Nessun miglioramento per {patience} epoche. Training interrotto.")
+                break
+
+    # Generazione e salvataggio del grafico di loss
+    plot_path = os.path.join(os.path.dirname(save_path), "loss_curve.png")
+    plt.figure(figsize=(9, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training vs Validation Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(plot_path)
+    print(f"Grafico delle loss salvato in: {plot_path}")
     print("Training complete!")
 
 

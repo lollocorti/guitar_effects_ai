@@ -5,7 +5,6 @@ import numpy as np
 import librosa
 import soundfile as sf
 from torch.utils.data import Dataset
-import matplotlib.pyplot as plt
 import torchaudio.transforms as T
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +40,6 @@ def compute_mel_feature(audio, sr=48000, n_mels=128, n_fft=2048, hop_length=512)
         audio = np.mean(audio, axis=1)
     mel_spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels)
     mel_db = librosa.power_to_db(mel_spec, ref=np.max)
-    # Normalizzazione in scala [0, 1] costante
     mel_norm = np.clip((mel_db + 80.0) / 80.0, 0.0, 1.0)
     return mel_norm.astype(np.float32)
 
@@ -97,9 +95,9 @@ class GuitarDataset(Dataset):
         self.amp_to_id = {amp_name: idx for idx, amp_name in enumerate(sorted(amps))}
         self.id_to_amp = {idx: amp_name for amp_name, idx in self.amp_to_id.items()}
 
-        # SpecAugment Masking Transforms
-        self.time_masking = T.TimeMasking(time_mask_param=20)
-        self.freq_masking = T.FrequencyMasking(freq_mask_param=15)
+        # SpecAugment: Mascheramento potenziato (applicato solo se is_train=True)
+        self.time_masking = T.TimeMasking(time_mask_param=35)
+        self.freq_masking = T.FrequencyMasking(freq_mask_param=20)
 
     def __len__(self):
         return len(self.metadata)
@@ -111,7 +109,7 @@ class GuitarDataset(Dataset):
         mel_norm = np.load(spec_path)
         x_tensor = torch.tensor(mel_norm, dtype=torch.float32).unsqueeze(0)
 
-        # SpecAugment applicato solo in fase di training
+        # SpecAugment viene eseguito solo durante la fase di training
         if self.is_train:
             x_tensor = self.freq_masking(x_tensor)
             x_tensor = self.time_masking(x_tensor)

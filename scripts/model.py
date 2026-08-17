@@ -29,7 +29,7 @@ class GuitarEffectsNet(nn.Module):
     def __init__(self, num_amp_classes=10):
         super().__init__()
 
-        # Extractor Residuo (Mantiene sia informazione timbrica che temporale)
+        # Extractor Feature Convolutional (ResNet Backbone)
         self.stem = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(32),
@@ -40,14 +40,24 @@ class GuitarEffectsNet(nn.Module):
         self.layer3 = ResBlock(128, 256, stride=2)
         self.layer4 = ResBlock(256, 512, stride=2)
 
-        # Global Average Pooling su frequenze e tempo
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        # Pooling solo sulla dimensione delle frequenze (F -> 1), preservando il tempo (T)
+        self.freq_pool = nn.AdaptiveAvgPool2d((1, None))
 
+        # Modulo Ricorrente (BiGRU) per analizzare l'evoluzione temporale dell'audio
+        self.gru = nn.GRU(
+            input_size=512,
+            hidden_size=256,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True
+        )
+
+        # FC Condivisa con Dropout incrementato per evitare overfitting
         self.shared_fc = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(512, 256),  # 256 * 2 (dovuto a bidirectional GRU)
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.3)
+            nn.Dropout(p=0.4)
         )
 
         # Head 1: Classificazione Amplificatore
@@ -60,23 +70,33 @@ class GuitarEffectsNet(nn.Module):
         self.head_params = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.2),
+            nn.Dropout(p=0.3),
             nn.Linear(128, 15),
             nn.Sigmoid()
         )
 
     def forward(self, x):
+        # 1. Extractor Convoluzionale
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
-        x = self.layer4(x)
+        x = self.layer4(x)  # Shape: [B, 512, F, T]
 
-        x = self.global_pool(x)
-        x = torch.flatten(x, 1)
+        # 2. Pooling Frequenziale
+        x = self.freq_pool(x).squeeze(2)  # Shape: [B, 512, T]
+        x = x.permute(0, 2, 1)            # Shape: [B, T, 512] (compatibile con GRU)
 
-        feat = self.shared_fc(x)
+        # 3. Processamento Ricorrente Temporal-Aware
+        gru_out, _ = self.gru(x)          # Shape: [B, T, 512]
+        
+        # Prendiamo la media sulle feature temporali arricchite dal contesto della GRU
+        feat_temporal = torch.mean(gru_out, dim=1) # Shape: [B, 512]
 
+        # 4. Dense Layer condiviso
+        feat = self.shared_fc(feat_temporal)
+
+        # 5. Output Heads
         logits_amp = self.head_amp(feat)
         logits_onoff = self.head_onoff(feat)
         pred_params = self.head_params(feat)
