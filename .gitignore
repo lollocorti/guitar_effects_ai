@@ -1,7 +1,9 @@
 # Cartelle pesanti e dati
-dataset_pedalboard/
+dataset/
 IDMT-SMT-GUITAR_V2/
 env/
+ir/
+amp_heads/
 
 # Modelli, pesi ed esecuzioni temporanee
 *.pth

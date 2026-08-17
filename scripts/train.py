@@ -28,7 +28,7 @@ def train_model(dataset_dir=None, save_path=None):
 
     if dataset_dir is None:
         project_root = os.path.abspath(os.path.join(base_dir, ".."))
-        dataset_dir = os.path.join(project_root, "datasets")
+        dataset_dir = os.path.join(project_root, "dataset")
 
     if save_path is None:
         save_path = os.path.join(base_dir, "pod_go_model.pth")
@@ -135,3 +135,7 @@ def train_model(dataset_dir=None, save_path=None):
             }, save_path)
             print(f"Model saved to {save_path}")
     print("Training complete!")
+
+
+if __name__ == "__main__":
+    train_model()

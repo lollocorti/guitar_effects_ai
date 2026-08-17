@@ -26,7 +26,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 IDMT_DATASET_DIR = os.path.join(PROJECT_ROOT, "IDMT-SMT-GUITAR_V2")
 AMP_HEADS_DIR = os.path.join(PROJECT_ROOT, "amp_heads")
 IR_DIR = os.path.join(PROJECT_ROOT, "ir")
-OUTPUT_DATASET_DIR = os.path.join(PROJECT_ROOT, "datasets")
+OUTPUT_DATASET_DIR = os.path.join(PROJECT_ROOT, "dataset")
 
 SAMPLE_RATE = 48000
 CHUNK_DURATION = 4.0
