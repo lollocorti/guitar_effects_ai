@@ -25,14 +25,14 @@ def masked_mse_loss(pred_params, target_params, target_onoff):
 
 def get_next_model_path(models_dir):
     """
-    Scansiona la cartella models e restituisce il percorso per il nuovo file (es. model1.pth, model2.pth)
+    Scansiona la cartella models e restituisce i percorsi dinamici per il modello
+    e il grafico della loss (es. model1.pth, loss_curve_model1.png).
     """
     os.makedirs(models_dir, exist_ok=True)
     existing_indices = []
     
     for filename in os.listdir(models_dir):
         if filename.startswith("model") and filename.endswith(".pth"):
-            # Estrae il numero tra 'model' e '.pth'
             num_part = filename[5:-4]
             if num_part.isdigit():
                 existing_indices.append(int(num_part))
@@ -45,37 +45,36 @@ def get_next_model_path(models_dir):
 
 
 def train_model(dataset_dir=None, models_dir=None):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Rilevamento automatico ambiente Google Colab
+    is_colab = os.path.exists("/content")
 
     if dataset_dir is None:
-        project_root = os.path.abspath(os.path.join(base_dir, ".."))
-        dataset_dir = os.path.join(project_root, "dataset")
+        dataset_dir = "/content/dataset" if is_colab else os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dataset"))
 
     if models_dir is None:
-        models_dir = os.path.join(base_dir, "models")
+        models_dir = "/content/drive/MyDrive/guitar_effects_ai/models" if is_colab else os.path.abspath(os.path.join(os.path.dirname(__file__), "models"))
 
-    # Genera automaticamente il percorso incrementale (model1.pth, model2.pth...)
+    # Generazione dei percorsi incrementali
     save_path, plot_path = get_next_model_path(models_dir)
 
-    print(f"I modelli e il grafico verranno salvati in:\n - Modello: {save_path}\n - Grafico: {plot_path}")
+    print(f"I file verranno salvati in:\n - Modello: {save_path}\n - Grafico: {plot_path}")
 
     batch_size = 32
     epochs = 60
     learning_rate = 5e-4
-    weight_decay = 1e-3  # Calibrato da 1e-2 a 1e-3 per bilanciare regolarizzazione ed espressività
+    weight_decay = 1e-3
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training Device: {device}")
     print(f"Dataset Path: {dataset_dir}")
 
-    # 1. Istanziazione distinta per separare nettamente le logiche di SpecAugment
+    # Istanziazione dataset (SpecAugment attivo solo per il train set)
     train_dataset_full = GuitarDataset(dataset_dir=dataset_dir, is_train=True)
     val_dataset_full = GuitarDataset(dataset_dir=dataset_dir, is_train=False)
 
     total_samples = len(train_dataset_full)
     train_size = int(0.85 * total_samples)
 
-    # Creazione di indici causali riproducibili
     generator = torch.Generator().manual_seed(42)
     indices = torch.randperm(total_samples, generator=generator).tolist()
 
@@ -98,7 +97,6 @@ def train_model(dataset_dir=None, models_dir=None):
     patience = 12
     patience_counter = 0
 
-    # Tracciamento storico metriche per grafici
     train_losses = []
     val_losses = []
 
@@ -120,6 +118,7 @@ def train_model(dataset_dir=None, models_dir=None):
             loss_onoff = criterion_onoff(logits_onoff, y_onoff)
             loss_params = masked_mse_loss(pred_params, y_params, y_onoff)
 
+            # Pesi bilanciati delle tre loss
             total_loss = 2.0 * loss_amp + 1.0 * loss_onoff + 0.5 * loss_params
 
             total_loss.backward()
@@ -148,7 +147,7 @@ def train_model(dataset_dir=None, models_dir=None):
                 loss_onoff = criterion_onoff(logits_onoff, y_onoff)
                 loss_params = masked_mse_loss(pred_params, y_params, y_onoff)
 
-                total_loss = loss_amp + 1.0 * loss_onoff + 0.8 * loss_params
+                total_loss = 2.0 * loss_amp + 1.0 * loss_onoff + 0.5 * loss_params
                 val_loss += total_loss.item() * x.size(0)
 
                 preds_amp = torch.argmax(logits_amp, dim=1)
@@ -180,19 +179,19 @@ def train_model(dataset_dir=None, models_dir=None):
                 print(f"\n[Early Stopping] Nessun miglioramento per {patience} epoche. Training interrotto.")
                 break
 
-    # Generazione e salvataggio del grafico di loss
-    plot_path = os.path.join(os.path.dirname(save_path), "loss_curve.png")
+    # Generazione del grafico di loss con nome dinamico abbinato
     plt.figure(figsize=(9, 5))
     plt.plot(train_losses, label='Train Loss')
     plt.plot(val_losses, label='Val Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Training vs Validation Loss')
+    plt.title(f'Training vs Validation Loss ({os.path.basename(save_path)})')
     plt.legend()
     plt.grid(True)
     plt.savefig(plot_path)
+    plt.close()
     print(f"Grafico delle loss salvato in: {plot_path}")
-    print("Training complete!")
+    print("Training completato!")
 
 
 if __name__ == "__main__":
