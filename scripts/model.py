@@ -52,6 +52,13 @@ class GuitarEffectsNet(nn.Module):
             bidirectional=True
         )
 
+        # Attention Mechanism per pesare i frame temporali rilevanti (es. attacco della nota)
+        self.attention = nn.Sequential(
+            nn.Linear(512, 128),
+            nn.Tanh(),
+            nn.Linear(128, 1)
+        )
+
         # FC Condivisa con Dropout incrementato per evitare overfitting
         self.shared_fc = nn.Sequential(
             nn.Linear(512, 256),  # 256 * 2 (dovuto a bidirectional GRU)
@@ -89,14 +96,15 @@ class GuitarEffectsNet(nn.Module):
 
         # 3. Processamento Ricorrente Temporal-Aware
         gru_out, _ = self.gru(x)          # Shape: [B, T, 512]
-        
-        # Prendiamo la media sulle feature temporali arricchite dal contesto della GRU
-        feat_temporal = torch.mean(gru_out, dim=1) # Shape: [B, 512]
 
-        # 4. Dense Layer condiviso
+        # 4. Temporal Attention Pooling (Sostituisce torch.mean)
+        attn_weights = torch.softmax(self.attention(gru_out), dim=1)  # Shape: [B, T, 1]
+        feat_temporal = torch.sum(gru_out * attn_weights, dim=1)      # Shape: [B, 512]
+
+        # 5. Dense Layer condiviso
         feat = self.shared_fc(feat_temporal)
 
-        # 5. Output Heads
+        # 6. Output Heads
         logits_amp = self.head_amp(feat)
         logits_onoff = self.head_onoff(feat)
         pred_params = self.head_params(feat)

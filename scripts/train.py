@@ -23,16 +23,41 @@ def masked_mse_loss(pred_params, target_params, target_onoff):
         return masked_diff.sum() / total_active_params
     return torch.tensor(0.0, device=pred_params.device)
 
+def get_next_model_path(models_dir):
+    """
+    Scansiona la cartella models e restituisce il percorso per il nuovo file (es. model1.pth, model2.pth)
+    """
+    os.makedirs(models_dir, exist_ok=True)
+    existing_indices = []
+    
+    for filename in os.listdir(models_dir):
+        if filename.startswith("model") and filename.endswith(".pth"):
+            # Estrae il numero tra 'model' e '.pth'
+            num_part = filename[5:-4]
+            if num_part.isdigit():
+                existing_indices.append(int(num_part))
+    
+    next_idx = max(existing_indices) + 1 if existing_indices else 1
+    model_name = f"model{next_idx}.pth"
+    plot_name = f"loss_curve_model{next_idx}.png"
+    
+    return os.path.join(models_dir, model_name), os.path.join(models_dir, plot_name)
 
-def train_model(dataset_dir=None, save_path=None):
+
+def train_model(dataset_dir=None, models_dir=None):
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     if dataset_dir is None:
         project_root = os.path.abspath(os.path.join(base_dir, ".."))
         dataset_dir = os.path.join(project_root, "dataset")
 
-    if save_path is None:
-        save_path = os.path.join(base_dir, "pod_go_model.pth")
+    if models_dir is None:
+        models_dir = os.path.join(base_dir, "models")
+
+    # Genera automaticamente il percorso incrementale (model1.pth, model2.pth...)
+    save_path, plot_path = get_next_model_path(models_dir)
+
+    print(f"I modelli e il grafico verranno salvati in:\n - Modello: {save_path}\n - Grafico: {plot_path}")
 
     batch_size = 32
     epochs = 60
@@ -63,7 +88,7 @@ def train_model(dataset_dir=None, save_path=None):
     num_amp_classes = len(train_dataset_full.amp_to_id)
     model = GuitarEffectsNet(num_amp_classes=num_amp_classes).to(device)
 
-    criterion_amp = nn.CrossEntropyLoss()
+    criterion_amp = nn.CrossEntropyLoss(label_smoothing=0.1)
     criterion_onoff = nn.BCEWithLogitsLoss()
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -95,7 +120,7 @@ def train_model(dataset_dir=None, save_path=None):
             loss_onoff = criterion_onoff(logits_onoff, y_onoff)
             loss_params = masked_mse_loss(pred_params, y_params, y_onoff)
 
-            total_loss = loss_amp + 1.0 * loss_onoff + 0.8 * loss_params
+            total_loss = 2.0 * loss_amp + 1.0 * loss_onoff + 0.5 * loss_params
 
             total_loss.backward()
             optimizer.step()
